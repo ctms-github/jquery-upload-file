@@ -1,6 +1,6 @@
 /*!
  * jQuery Upload File Plugin
- * version: 4.0.10
+ * version: 4.0.10.CTMS //FIXME 
  * @requires jQuery v1.5 or later & form plugin
  * Copyright (c) 2013 Ravishanker Kusuma
  * http://hayageek.com/
@@ -27,6 +27,7 @@
             // http://stackoverflow.com/questions/11832930/html-input-file-accept-attribute-file-type-csv
             acceptFiles: "*",
             fileName: "file",
+            fileUniqueIdName: null,
             formData: false,
             dynamicFormData:false,
             maxFileSize: -1,
@@ -52,12 +53,14 @@
                 return true;
             },
             onSubmit: function (files, xhr) {},
-            onSuccess: function (files, response, xhr, pd) {},
-            onError: function (files, status, message, pd) {},
-            onCancel: function (files, pd) {},
-            onAbort: function (files, pd) {},            
+            onBeforeSend: function (fileArray, obj, file, xhr, o) {},
+            onSuccess: function (files, response, xhr, pd, file) {},
+            onError: function (files, status, message, pd, file) {},
+            onCancel: function (files, pd, file) {},
+            onAbort: function (files, pd, file) {},            
             downloadCallback: false,
             deleteCallback: false,
+            updateProgressCallback: false,
             afterUploadAll: false,
             serialize:true,
             sequential:false,
@@ -239,10 +242,11 @@
 
             return pd;
         }
-
+        
         this.getResponses = function () {
             return this.responses;
         }
+        
         var mainQ=[];
         var progressQ=[]
         var running = false;
@@ -399,9 +403,25 @@
 
 		}
 
-
+		/**
+		 * Build an unique identifier for the file.
+		 * 
+		 * @param {File}
+		 *            file - the file
+		 */
+		function buildUniqueFileId(file) {
+			var id = file.name;
+			id = id.replace(/[\s!\"#$%&'\(\)\*\+,\/:;<=>\?\@\[\\\]\^`\{\|\}~]/g, '_');
+			id = (new Date()).getTime() + "_" + Math.floor(Math.random() * 10000000) + Math.floor(Math.random() * 10000000) + "_" + id;
+			return id;
+		}
+		
         function serializeAndUploadFiles(s, obj, files) {
             for(var i = 0; i < files.length; i++) {
+            	// Create an unique file id
+            	var fileUniqueId = buildUniqueFileId(files[i]);
+            	files[i].fileUniqueId = fileUniqueId;
+            	
                 if(!isFileTypeAllowed(obj, s, files[i].name)) {
                     if(s.showError) $("<div class='" + s.errorClass + "'><b>" + files[i].name + "</b> " + s.extErrorStr + s.allowedTypes + "</div>").appendTo(obj.errorLog);
                     continue;
@@ -424,6 +444,10 @@
                 obj.existingFileNames.push(files[i].name);
                 var ts = s;
                 var fd = new FormData();
+                if(s.fileUniqueIdName) {
+                	fd.append(s.fileUniqueIdName, fileUniqueId);
+                }
+                
                 var fileName = s.fileName.replace("[]", "");
                 fd.append(fileName, files[i]);
                 var extraData = s.formData;
@@ -439,8 +463,8 @@
 
                 var pd = new createProgressDiv(obj, s);
                 var fileNameStr = "";
-                if(s.showFileCounter) fileNameStr = obj.fileCounter + s.fileCounterStyle + files[i].name
-                else fileNameStr = files[i].name;
+                if(s.showFileCounter) fileNameStr = obj.fileCounter + s.fileCounterStyle + fileName
+                else fileNameStr = fileName;
 
 				if(s.showFileSize)
 				fileNameStr += " ("+getSizeStr(files[i].size)+")";
@@ -450,7 +474,7 @@
                     s.url + "' enctype='" + s.enctype + "'></form>");
                 form.appendTo('body');
                 var fileArray = [];
-                fileArray.push(files[i].name);
+                fileArray.push(fileName);
                 
                 ajaxFormSubmit(form, ts, pd, fileArray, obj, files[i]);
                 obj.fileCounter++;
@@ -688,9 +712,28 @@
             return bar;
         }
 
+        /**
+         * Update the progress bar value.
+         */
+        function updateProgressBar(percentComplete, form, s, pd, fileArray, obj, file) {
+            //Fix for smaller file uploads in MAC
+            if(percentComplete!=100 && percentComplete>98) percentComplete = 98;
 
+            var percentVal = Math.floor(percentComplete) + '%';
+            pd.progressbar.width(percentVal);
+            if(s.showProgress) {
+                pd.progressbar.html(percentVal);
+                pd.progressbar.css('text-align', 'center');
+            }
+            
+            if (s.updateProgressCallback) {
+            	s.updateProgressCallback.call(obj, percentComplete, form, s, pd, fileArray, obj, file);
+            }
+        }
+        
         function ajaxFormSubmit(form, s, pd, fileArray, obj, file) {
-            var currentXHR = null;
+            var currentXHR = null, $this=this;
+            
             var options = {
                 cache: false,
                 contentType: false,
@@ -732,14 +775,15 @@
                     	 mainQ.splice(mainQ.indexOf(form), 1);
                         removeExistingFileName(obj, fileArray);
                         pd.statusbar.remove();
-                        s.onCancel.call(obj, fileArray, pd);
+                        s.onCancel.call(obj, fileArray, pd, file);
                         obj.selectedFiles -= fileArray.length; //reduce selected File count
                         updateFileCounter(s, obj);
                     });
                     return false;
                 },
                 beforeSend: function (xhr, o) {
-
+                    s.onBeforeSend.call(this, fileArray, obj, file, xhr, o);	// call callback
+                	
                     pd.progressDiv.show();
                     pd.cancel.hide();
                     pd.done.hide();
@@ -749,26 +793,18 @@
                             removeExistingFileName(obj, fileArray);
                             xhr.abort();
                             obj.selectedFiles -= fileArray.length; //reduce selected File count
-							s.onAbort.call(obj, fileArray, pd);
-
+							s.onAbort.call(obj, fileArray, pd, file);
                         });
                     }
                     if(!feature.formdata) //For iframe based push
                     {
-                        pd.progressbar.width('5%');
-                    } else pd.progressbar.width('1%'); //Fix for small files
+                        updateProgressBar(5, form, s, pd, fileArray, obj, file);
+                    } else {
+                    	updateProgressBar(1, form, s, pd, fileArray, obj, file);	//Fix for small files
+                    }
                 },
                 uploadProgress: function (event, position, total, percentComplete) {
-                    //Fix for smaller file uploads in MAC
-                    if(percentComplete > 98) percentComplete = 98;
-
-                    var percentVal = percentComplete + '%';
-                    if(percentComplete > 1) pd.progressbar.width(percentVal)
-                    if(s.showProgress) {
-                        pd.progressbar.html(percentVal);
-                        pd.progressbar.css('text-align', 'center');
-                    }
-
+                	updateProgressBar(percentComplete, form, s, pd, fileArray, obj, file);
                 },
                 success: function (data, message, xhr) {
                 	pd.cancel.remove();
@@ -777,7 +813,7 @@
                     if(s.returnType == "json" && $.type(data) == "object" && data.hasOwnProperty(s.customErrorKeyStr)) {
                         pd.abort.hide();
                         var msg = data[s.customErrorKeyStr];
-                        s.onError.call(this, fileArray, 200, msg, pd);
+                        s.onError.call(this, fileArray, 200, msg, pd, file);
                         if(s.showStatusAfterError) {
                             pd.progressDiv.hide();
                             pd.statusbar.append("<span class='" + s.errorClass + "'>ERROR: " + msg + "</span>");
@@ -790,14 +826,11 @@
                         return;
                     }
                     obj.responses.push(data);
-                    pd.progressbar.width('100%')
-                    if(s.showProgress) {
-                        pd.progressbar.html('100%');
-                        pd.progressbar.css('text-align', 'center');
-                    }
+                    
+                    updateProgressBar(100, form, s, pd, fileArray, obj, file);
 
                     pd.abort.hide();
-                    s.onSuccess.call(this, fileArray, data, xhr, pd);
+                    s.onSuccess.call(this, fileArray, data, xhr, pd, file);
                     if(s.showStatusAfterSuccess) {
                         if(s.showDone) {
                             pd.done.show();
@@ -844,7 +877,7 @@
                         updateFileCounter(s, obj);
 
                     } else {
-                        s.onError.call(this, fileArray, status, errMsg, pd);
+                        s.onError.call(this, fileArray, status, errMsg, pd, file);
                         if(s.showStatusAfterError) {
                             pd.progressDiv.hide();
                             pd.statusbar.append("<span class='" + s.errorClass + "'>ERROR: " + errMsg + "</span>");
@@ -876,7 +909,7 @@
                         removeExistingFileName(obj, fileArray);
                         form.remove();
                         pd.statusbar.remove();
-                        s.onCancel.call(obj, fileArray, pd);
+                        s.onCancel.call(obj, fileArray, pd, file);
                         obj.selectedFiles -= fileArray.length; //reduce selected File count
                         updateFileCounter(s, obj);
                     });
