@@ -124,7 +124,7 @@
             if($.fn.ajaxForm) {
 
                 if(s.dragDrop) {
-                    var dragDrop = $('<div class="' + s.dragDropContainerClass + '" style="vertical-align:top;"></div>').width(s.dragdropWidth);
+                    var dragDrop = $('<div class="' + s.dragDropContainerClass + '" style="vertical-align:top;"></div>').css("width", s.dragdropWidth);
                     $(obj).append(dragDrop);
                     $(dragDrop).append(uploadLabel);
                     $(dragDrop).append($(s.dragDropStr));
